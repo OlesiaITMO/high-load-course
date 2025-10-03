@@ -7,14 +7,20 @@ import org.springframework.stereotype.Component
 
 @Component
 class Metrics {
-    val ordersCounter: Counter = Counter.builder("orders_counter")
-        .description("Общее количество поступивших заказов")
-        .tag("type", "order")
+    val requestEventIncoming: Counter = Counter.builder("request_events")
+        .description("Количество статусов выполняющихся запросов")
+        .tag("status", "incoming")
+        .register(Metrics.globalRegistry)
+
+    val requestEventOutcoming: Counter = Counter.builder("request_events")
+        .tag("status", "outcoming")
+        .register(Metrics.globalRegistry)
+
+    val requestEventCompleted: Counter = Counter.builder("request_events")
+        .tag("status", "completed")
         .register(Metrics.globalRegistry)
 
     val ordersDuration: Timer = Timer.builder("orders_duration")
         .description("Время обработки одного заказа (полное)")
-        .tag("type", "order")
-        .publishPercentiles(0.500, 0.900, 0.999)
         .register(Metrics.globalRegistry)
 }

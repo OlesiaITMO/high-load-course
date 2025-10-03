@@ -61,8 +61,7 @@ class APIController {
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
-        metrics.ordersCounter.increment()
-        val startTime = System.currentTimeMillis()
+        metrics.requestEventIncoming.increment()
 
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
@@ -71,8 +70,6 @@ class APIController {
         } ?: throw IllegalArgumentException("No such order $orderId")
 
         val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        metrics.ordersDuration.record(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS)
-
         return PaymentSubmissionDto(createdAt, paymentId)
     }
 

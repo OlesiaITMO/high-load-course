@@ -47,15 +47,15 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 100,
-            "gradientMode": "opacity",
+            "fillOpacity": 0,
+            "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 1,
             "pointSize": 5,
             "scaleDistribution": {
@@ -94,7 +94,7 @@
         "x": 0,
         "y": 0
       },
-      "id": 101,
+      "id": 103,
       "options": {
         "legend": {
           "calcs": [],
@@ -113,20 +113,16 @@
         {
           "disableTextWrap": false,
           "editorMode": "builder",
-          "exemplar": false,
-          "expr": "sum(rate(orders_counter_total[$__rate_interval]))",
-          "format": "heatmap",
+          "expr": "increase(request_events_total[5m])",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "req/sec",
+          "legendFormat": "{{status}}",
           "range": true,
           "refId": "A",
           "useBackend": false
         }
       ],
-      "title": "New panel",
-      "transparent": true,
+      "title": "Статус запроса",
       "type": "timeseries"
     },
     {
@@ -193,7 +189,7 @@
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "orientation": "auto",
         "showValue": "auto",
@@ -203,7 +199,7 @@
           "mode": "single",
           "sort": "none"
         },
-        "xTickLabelRotation": 0,
+        "xTickLabelRotation": 45,
         "xTickLabelSpacing": 0
       },
       "pluginVersion": "12.1.1",
@@ -211,17 +207,117 @@
         {
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "sum(rate(orders_duration_seconds_sum[$__rate_interval])) / sum(rate(orders_duration_seconds_count[$__rate_interval])) * 1000",
+          "expr": "sum(rate(orders_duration_seconds_sum[$__rate_interval])) / (sum(rate(orders_duration_seconds_count[$__rate_interval])))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
-          "legendFormat": "__auto",
+          "legendFormat": "Avg (sec)",
           "range": true,
           "refId": "A",
           "useBackend": false
         }
       ],
-      "title": "New panel",
+      "title": "Среднее время обработки запроса (в сек)",
       "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 100,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "id": 101,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.1.1",
+      "targets": [
+        {
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "exemplar": false,
+          "expr": "sum by(status) (rate(request_events_total[$__rate_interval]))",
+          "format": "heatmap",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "{{status}}",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        }
+      ],
+      "title": "Стутус запроса (в сек)",
+      "type": "timeseries"
     },
     {
       "collapsed": false,
@@ -229,7 +325,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 28
       },
       "id": 27,
       "panels": [],
@@ -301,7 +397,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 15
+        "y": 29
       },
       "id": 29,
       "options": {
@@ -400,7 +496,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 29
       },
       "id": 26,
       "options": {
@@ -500,7 +596,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 37
       },
       "id": 28,
       "options": {
@@ -580,7 +676,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 37
       },
       "id": 36,
       "options": {
@@ -697,7 +793,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 45
       },
       "id": 37,
       "options": {
@@ -779,7 +875,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 31
+        "y": 45
       },
       "id": 31,
       "options": {
@@ -837,7 +933,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 53
       },
       "id": 10,
       "panels": [
@@ -1180,7 +1276,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 54
       },
       "id": 12,
       "panels": [
@@ -1570,7 +1666,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 55
       },
       "id": 17,
       "panels": [
@@ -2290,7 +2386,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 56
       },
       "id": 21,
       "panels": [
@@ -2595,7 +2691,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 57
       },
       "id": 38,
       "panels": [
@@ -3095,7 +3191,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 58
       },
       "id": 97,
       "panels": [
@@ -3688,5 +3784,5 @@
   "timezone": "",
   "title": "Services statistic",
   "uid": "KVr-Vmpnz",
-  "version": 3
+  "version": 4
 }
