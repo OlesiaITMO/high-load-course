@@ -8,10 +8,6 @@ class OngoingWindow(
 ) {
     private val window = Semaphore(maxWinSize)
 
-//    fun rwe() {
-//        window.
-//    }
-
     fun acquire() {
         window.acquire()
     }
