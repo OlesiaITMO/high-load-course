@@ -1,5 +1,6 @@
 package ru.quipy.common.utils
 
+import jakarta.annotation.Priority
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -7,6 +8,7 @@ import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.time.Duration
+import java.util.PriorityQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.atomic.AtomicLong
@@ -21,6 +23,26 @@ class SlidingWindowRateLimiter(
 
     private val sum = AtomicLong(0)
     private val queue = PriorityBlockingQueue<Measure>(10_000)
+    private val priorityQueue = PriorityBlockingQueue<Long>()
+
+    private fun tickWithPriority(priority: Long): Boolean {
+        while (true) {
+            val curSum = sum.get()
+            if (curSum >= rate || priority != priorityQueue.peek()) return false
+            if (sum.compareAndSet(curSum, curSum + 1)) {
+                queue.add(Measure(1, System.currentTimeMillis()))
+                priorityQueue.poll()
+                return true
+            }
+        }
+    }
+
+    fun tickWithPriorityBlocking(priority: Long) {
+        priorityQueue.put(priority)
+        while (!tickWithPriority(priority)) {
+            Thread.sleep(10)
+        }
+    }
 
     override fun tick(): Boolean {
         while (true) {

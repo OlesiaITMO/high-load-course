@@ -12,6 +12,7 @@ import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 @Service
 class OrderPayer {
@@ -36,8 +37,15 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    private val counter = AtomicLong(0)
+
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
         val createdAt = System.currentTimeMillis()
+        val requiredTime = paymentService.approximateWaitingTime(counter.get())
+        if (createdAt + requiredTime >= deadline) {
+            return null
+        }
+        counter.incrementAndGet()
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
@@ -49,6 +57,7 @@ class OrderPayer {
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+            counter.decrementAndGet()
         }
         return createdAt
     }
