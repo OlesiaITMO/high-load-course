@@ -20,7 +20,7 @@ class OrderPayer {
     var limiter = LeakingBucketRateLimiter(
         rate = 11,
         window = Duration.ofSeconds(1),
-        bucketSize = 270
+        bucketSize = 264
     )
 
     companion object {
