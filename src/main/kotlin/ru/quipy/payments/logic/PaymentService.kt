@@ -1,5 +1,6 @@
 package ru.quipy.payments.logic
 
+import okhttp3.Request
 import java.time.Duration
 import java.util.*
 
@@ -24,6 +25,7 @@ interface PaymentExternalSystemAdapter {
     fun price(): Int
 
     fun isEnabled(): Boolean
+    fun sendRequest(request: Request, paymentId: UUID, transactionId: UUID): Boolean
 }
 
 /**
