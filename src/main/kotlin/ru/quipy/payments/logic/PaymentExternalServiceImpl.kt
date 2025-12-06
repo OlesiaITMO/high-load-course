@@ -44,9 +44,9 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val rateLimiter = NonBlockingSlidingWindowRateLimiter(
-        rate = rateLimitPerSec,
-    )
+    private val rateLimiter: NonBlockingSlidingWindowRateLimiter by lazy {
+        NonBlockingSlidingWindowRateLimiter(rate = rateLimitPerSec)
+    }
 
     private val paymentScope = CoroutineScope(
         Dispatchers.IO + SupervisorJob() + CoroutineName("payment-service-$accountName")
@@ -99,6 +99,9 @@ class PaymentExternalSystemAdapterImpl(
 
         while (!success && attempt++ < MAX_RETRY_ATTEMPTS) {
             try {
+                if (attempt > 1) {
+                    delay(50)
+                }
                 val timeUntilDeadline = deadline - now()
                 if (timeUntilDeadline <= 0) {
                     message = "Deadline exceeded"

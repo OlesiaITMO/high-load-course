@@ -4,44 +4,52 @@ import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicLong
 import java.time.Duration
 import java.util.concurrent.ConcurrentLinkedDeque
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
 
 class NonBlockingSlidingWindowRateLimiter(
     private val rate: Int,
     private val window: Duration = Duration.ofSeconds(1)
 ) {
-    private val counter = AtomicLong(0)
-    private val timestamps = ConcurrentLinkedDeque<Long>()
+    private val timestamps = ConcurrentLinkedQueue<Long>()
+    private val currentCount = AtomicInteger(0)
 
-    private fun cleanupExpired() {
-        val threshold = System.currentTimeMillis() - window.toMillis()
-        while (true) {
-            val head = timestamps.peekFirst() ?: break
-            if (head >= threshold) break
-            timestamps.pollFirst()
-            counter.decrementAndGet()
+    suspend fun acquireSuspend(timeoutMillis: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+
+        while (System.currentTimeMillis() < deadline) {
+            removeExpired()
+            if (currentCount.get() < rate) {
+                val now = System.currentTimeMillis()
+                if (tryAdd(now)) {
+                    return true
+                }
+            }
+            delay(10)
         }
+        return false
     }
 
-    fun tryAcquire(): Boolean {
-        cleanupExpired()
-
+    private fun removeExpired() {
+        val expiration = System.currentTimeMillis() - window.toMillis()
         while (true) {
-            val current = counter.get()
-            if (current >= rate) return false
-
-            if (counter.compareAndSet(current, current + 1)) {
-                timestamps.addLast(System.currentTimeMillis())
-                return true
+            val ts = timestamps.peek() ?: break
+            if (ts < expiration) {
+                timestamps.poll()
+                currentCount.decrementAndGet()
+            } else {
+                break
             }
         }
     }
 
-    suspend fun acquireSuspend(timeoutMs: Long): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!tryAcquire()) {
-            if (System.currentTimeMillis() >= deadline) return false
-            delay(1)
+    private fun tryAdd(now: Long): Boolean {
+        if (currentCount.incrementAndGet() <= rate) {
+            timestamps.add(now)
+            return true
+        } else {
+            currentCount.decrementAndGet()
+            return false
         }
-        return true
     }
 }
