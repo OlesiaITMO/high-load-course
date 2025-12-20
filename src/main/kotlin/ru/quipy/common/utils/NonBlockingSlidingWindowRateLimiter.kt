@@ -25,7 +25,7 @@ class NonBlockingSlidingWindowRateLimiter(
                     return true
                 }
             }
-            delay(10)
+            delay(1)
         }
         return false
     }
