@@ -28,7 +28,6 @@ class PaymentExternalSystemAdapterImpl(
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
         val REQUEST_TIMEOUT = 1000L
-        val CONNECT_TIMEOUT = 1000L
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -49,7 +48,6 @@ class PaymentExternalSystemAdapterImpl(
 
         install(io.ktor.client.plugins.HttpTimeout) {
             requestTimeoutMillis = REQUEST_TIMEOUT
-            connectTimeoutMillis = CONNECT_TIMEOUT
         }
     }
 
@@ -85,7 +83,7 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        var result = send(paymentId, amount, transactionId, paymentStartedAt)
+        val result = send(paymentId, amount, transactionId, paymentStartedAt)
 
         val processedAt = now()
         dbScope.launch {
@@ -124,14 +122,14 @@ class PaymentExternalSystemAdapterImpl(
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
-                    logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId. ${now() - paymentStartedAt}", e)
+                    logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId.", e)
                 }
 
                 else -> {
-                    logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId. ${now() - paymentStartedAt}", e)
+                    logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId.", e)
                 }
             }
-            return Result(true, e.message)
+            return Result(false, e.message)
         } finally {
             semaphore.release()
         }
