@@ -27,7 +27,7 @@ class PaymentExternalSystemAdapterImpl(
 
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-        val REQUEST_TIMEOUT = 1000L
+        val REQUEST_TIMEOUT = 300L
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -83,7 +83,12 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        val result = send(paymentId, amount, transactionId, paymentStartedAt)
+        var result = send(paymentId, amount, transactionId, paymentStartedAt)
+        for (i in 0 until 2) {
+            if (result.status) break
+            delay(10)
+            result = send(paymentId, amount, transactionId, paymentStartedAt)
+        }
 
         val processedAt = now()
         dbScope.launch {
