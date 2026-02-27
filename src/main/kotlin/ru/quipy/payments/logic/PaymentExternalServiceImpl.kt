@@ -27,7 +27,7 @@ class PaymentExternalSystemAdapterImpl(
 
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-        val REQUEST_TIMEOUT = 300L
+        val REQUEST_TIMEOUT = 250L
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -84,9 +84,9 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         var result = send(paymentId, amount, transactionId, paymentStartedAt)
-        for (i in 0 until 2) {
+        for (i in 0 until 4) {
             if (result.status) break
-            delay(10)
+            delay(5)
             result = send(paymentId, amount, transactionId, paymentStartedAt)
         }
 
