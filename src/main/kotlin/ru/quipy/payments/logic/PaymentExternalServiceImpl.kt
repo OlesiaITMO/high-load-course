@@ -4,17 +4,21 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.ktor.client.*
 import io.ktor.client.engine.java.Java
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import kotlinx.coroutines.*
+import kotlin.time.Duration as KtDuration
 import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
+import ru.quipy.common.utils.Metrics
 import ru.quipy.common.utils.NonBlockingSlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import kotlin.time.Duration.Companion.milliseconds
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -22,12 +26,13 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
-    private val dbScope: CoroutineScope
+    private val dbScope: CoroutineScope,
+    private val metrics: Metrics
 ) : PaymentExternalSystemAdapter {
 
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-        val REQUEST_TIMEOUT = 250L
+        val REQUEST_TIMEOUT = 1500L
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -83,11 +88,8 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        var result = send(paymentId, amount, transactionId, paymentStartedAt)
-        for (i in 0 until 4) {
-            if (result.status) break
-            delay(5)
-            result = send(paymentId, amount, transactionId, paymentStartedAt)
+        val result = hedged(delay = 200.milliseconds, maxAttempts = 5) {
+            send(paymentId, amount, transactionId, paymentStartedAt)
         }
 
         val processedAt = now()
@@ -130,6 +132,9 @@ class PaymentExternalSystemAdapterImpl(
                     logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId.", e)
                 }
 
+                is CancellationException -> {}
+                is HttpRequestTimeoutException -> {}
+
                 else -> {
                     logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId.", e)
                 }
@@ -148,6 +153,36 @@ class PaymentExternalSystemAdapterImpl(
 
     data class Result(val status: Boolean, val message: String?)
 
+    suspend fun <T> hedged(
+        delay: KtDuration,
+        maxAttempts: Int,
+        block: suspend () -> T
+    ): T = coroutineScope {
+        val deferreds = mutableListOf<Deferred<T>>()
+        val result = CompletableDeferred<T>()
+
+        try {
+            repeat(maxAttempts) { i ->
+                deferreds += async {
+                    val value = block()
+                    result.complete(value)
+                    value
+                }
+                if (i < maxAttempts - 1) {
+                    withTimeoutOrNull(delay) { result.await() }
+                        ?.let {
+                            metrics.hedgedAttempts.record((i + 1).toDouble())
+                            return@coroutineScope it
+                        }
+                }
+            }
+            val value = result.await()
+            metrics.hedgedAttempts.record(maxAttempts.toDouble())
+            value
+        } finally {
+            deferreds.forEach { it.cancel() }
+        }
+    }
 }
 
 public fun now() = System.currentTimeMillis()
