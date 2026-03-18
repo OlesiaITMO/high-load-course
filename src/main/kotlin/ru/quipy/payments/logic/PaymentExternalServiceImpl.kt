@@ -2,13 +2,14 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.github.resilience4j.circuitbreaker.CircuitBreaker
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
 import io.ktor.client.*
 import io.ktor.client.engine.java.Java
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import kotlinx.coroutines.*
-import kotlin.time.Duration as KtDuration
 import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.Metrics
@@ -18,6 +19,8 @@ import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration as KtDuration
 import kotlin.time.Duration.Companion.milliseconds
 
 // Advice: always treat time as a Duration
@@ -32,7 +35,7 @@ class PaymentExternalSystemAdapterImpl(
 
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-        val REQUEST_TIMEOUT = 1500L
+        const val REQUEST_TIMEOUT = 1500L
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -55,6 +58,19 @@ class PaymentExternalSystemAdapterImpl(
             requestTimeoutMillis = REQUEST_TIMEOUT
         }
     }
+
+    private val circuitBreaker = CircuitBreaker.of(
+        "paymentService-$accountName",
+        CircuitBreakerConfig.custom()
+            .failureRateThreshold(50f)
+            .slowCallRateThreshold(50f)
+            .slowCallDurationThreshold(Duration.ofMillis(800))
+            .waitDurationInOpenState(Duration.ofSeconds(10))
+            .permittedNumberOfCallsInHalfOpenState(3)
+            .minimumNumberOfCalls(10)
+            .ignoreExceptions(CancellationException::class.java)
+            .build()
+    )
 
     private val rateLimiter: NonBlockingSlidingWindowRateLimiter by lazy {
         NonBlockingSlidingWindowRateLimiter(rate = rateLimitPerSec)
@@ -80,7 +96,7 @@ class PaymentExternalSystemAdapterImpl(
                         )
                     }
                     break
-                } catch (_: java.lang.IllegalArgumentException) {
+                } catch (_: IllegalArgumentException) {
                     delay(10)
                 }
             }
@@ -88,8 +104,42 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        val result = hedged(delay = 200.milliseconds, maxAttempts = 5) {
-            send(paymentId, amount, transactionId, paymentStartedAt)
+        val breakerStartNanos = System.nanoTime()
+
+        val result = try {
+            if (!circuitBreaker.tryAcquirePermission()) {
+                logger.warn(
+                    "[$accountName] Circuit breaker is OPEN. Payment request skipped for paymentId=$paymentId, txId=$transactionId"
+                )
+                Result(false, "Circuit breaker open")
+            } else {
+                val hedgedResult = hedged(delay = 200.milliseconds, maxAttempts = 5) {
+                    send(paymentId, amount, transactionId, paymentStartedAt)
+                }
+
+                val durationNanos = System.nanoTime() - breakerStartNanos
+
+                if (hedgedResult.status) {
+                    circuitBreaker.onSuccess(durationNanos, TimeUnit.NANOSECONDS)
+                } else {
+                    circuitBreaker.onError(
+                        durationNanos,
+                        TimeUnit.NANOSECONDS,
+                        PaymentProviderException(hedgedResult.message ?: "Payment provider returned unsuccessful result")
+                    )
+                }
+
+                hedgedResult
+            }
+        } catch (e: Exception) {
+            val durationNanos = System.nanoTime() - breakerStartNanos
+            circuitBreaker.onError(durationNanos, TimeUnit.NANOSECONDS, e)
+
+            logger.error(
+                "[$accountName] Payment execution failed under circuit breaker for txId: $transactionId, payment: $paymentId.",
+                e
+            )
+            Result(false, e.message)
         }
 
         val processedAt = now()
@@ -100,7 +150,7 @@ class PaymentExternalSystemAdapterImpl(
                         it.logProcessing(result.status, processedAt, transactionId, reason = result.message)
                     }
                     break
-                } catch (_: java.lang.IllegalArgumentException) {
+                } catch (_: IllegalArgumentException) {
                     delay(10)
                 }
             }
@@ -110,6 +160,7 @@ class PaymentExternalSystemAdapterImpl(
     suspend fun send(paymentId: UUID, amount: Int, transactionId: UUID, paymentStartedAt: Long): Result {
         try {
             semaphore.acquire()
+
             if (!rateLimiter.acquireSuspend(200L)) {
                 return Result(false, "Rate limit exceeded")
             }
@@ -117,15 +168,22 @@ class PaymentExternalSystemAdapterImpl(
             val response =
                 client.post("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
 
-                val body = try {
-                    mapper.readValue(response.bodyAsText(), ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.status.value}, reason: ${response.bodyAsText()}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                }
+            val responseText = response.bodyAsText()
 
-                logger.info("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}.")
-                return Result(true, body.message)
+            val body = try {
+                mapper.readValue(responseText, ExternalSysResponse::class.java)
+            } catch (e: Exception) {
+                logger.error(
+                    "[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.status.value}, reason: $responseText",
+                    e
+                )
+                ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+            }
+
+            logger.info(
+                "[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}."
+            )
+            return Result(body.result, body.message)
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -153,6 +211,8 @@ class PaymentExternalSystemAdapterImpl(
 
     data class Result(val status: Boolean, val message: String?)
 
+    class PaymentProviderException(message: String) : RuntimeException(message)
+
     suspend fun <T> hedged(
         delay: KtDuration,
         maxAttempts: Int,
@@ -176,6 +236,7 @@ class PaymentExternalSystemAdapterImpl(
                         }
                 }
             }
+
             val value = result.await()
             metrics.hedgedAttempts.record(maxAttempts.toDouble())
             value
@@ -185,4 +246,4 @@ class PaymentExternalSystemAdapterImpl(
     }
 }
 
-public fun now() = System.currentTimeMillis()
+fun now() = System.currentTimeMillis()
