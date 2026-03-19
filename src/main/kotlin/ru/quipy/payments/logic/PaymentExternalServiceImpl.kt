@@ -64,7 +64,7 @@ class PaymentExternalSystemAdapterImpl(
         CircuitBreakerConfig.custom()
             .failureRateThreshold(10F)
             .slowCallRateThreshold(10F)
-            .waitDurationInOpenState(Duration.ofSeconds(5))
+            .waitDurationInOpenState(Duration.ofSeconds(15))
             .slowCallDurationThreshold(Duration.ofSeconds(1))
             .permittedNumberOfCallsInHalfOpenState(30)
             .build()
