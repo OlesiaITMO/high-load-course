@@ -40,7 +40,7 @@ class OrderPayer(val dbScope: CoroutineScope) {
         64,
         60L,
         TimeUnit.SECONDS,
-        LinkedBlockingQueue(20_000),
+        LinkedBlockingQueue(30_000),
         NamedThreadFactory("payment-submission-executor"),
         ThreadPoolExecutor.DiscardOldestPolicy()
     )
