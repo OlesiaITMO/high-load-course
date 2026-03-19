@@ -62,8 +62,8 @@ class PaymentExternalSystemAdapterImpl(
     private val circuitBreaker = CircuitBreaker.of(
         "paymentService-$accountName",
         CircuitBreakerConfig.custom()
-            .failureRateThreshold(5F)
-            .slowCallRateThreshold(5F)
+            .failureRateThreshold(8F)
+            .slowCallRateThreshold(8F)
             .waitDurationInOpenState(Duration.ofSeconds(10))
             .slowCallDurationThreshold(Duration.ofSeconds(1))
             .permittedNumberOfCallsInHalfOpenState(40)
@@ -105,30 +105,23 @@ class PaymentExternalSystemAdapterImpl(
         val breakerStartNanos = System.nanoTime()
 
         val result = try {
-            if (!circuitBreaker.tryAcquirePermission()) {
-                logger.warn(
-                    "[$accountName] Circuit breaker is OPEN. Payment request skipped for paymentId=$paymentId, txId=$transactionId"
-                )
-                Result(false, "Circuit breaker open")
-            } else {
-                val hedgedResult = hedged(delay = 200.milliseconds, maxAttempts = 5) {
-                    send(paymentId, amount, transactionId, paymentStartedAt)
-                }
-
-                val durationNanos = System.nanoTime() - breakerStartNanos
-
-                if (hedgedResult.status) {
-                    circuitBreaker.onSuccess(durationNanos, TimeUnit.NANOSECONDS)
-                } else {
-                    circuitBreaker.onError(
-                        durationNanos,
-                        TimeUnit.NANOSECONDS,
-                        PaymentProviderException(hedgedResult.message ?: "Payment provider returned unsuccessful result")
-                    )
-                }
-
-                hedgedResult
+            val hedgedResult = hedged(delay = 200.milliseconds, maxAttempts = 5) {
+                send(paymentId, amount, transactionId, paymentStartedAt)
             }
+
+            val durationNanos = System.nanoTime() - breakerStartNanos
+
+            if (hedgedResult.status) {
+                circuitBreaker.onSuccess(durationNanos, TimeUnit.NANOSECONDS)
+            } else {
+                circuitBreaker.onError(
+                    durationNanos,
+                    TimeUnit.NANOSECONDS,
+                    PaymentProviderException(hedgedResult.message ?: "Payment provider returned unsuccessful result")
+                )
+            }
+
+            hedgedResult
         } catch (e: Exception) {
             val durationNanos = System.nanoTime() - breakerStartNanos
             circuitBreaker.onError(durationNanos, TimeUnit.NANOSECONDS, e)
