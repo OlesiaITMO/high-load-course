@@ -35,7 +35,7 @@ class PaymentExternalSystemAdapterImpl(
 
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
-        const val REQUEST_TIMEOUT = 1500L
+        const val REQUEST_TIMEOUT = 2500L
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -62,11 +62,11 @@ class PaymentExternalSystemAdapterImpl(
     private val circuitBreaker = CircuitBreaker.of(
         "paymentService-$accountName",
         CircuitBreakerConfig.custom()
-            .failureRateThreshold(10F)
-            .slowCallRateThreshold(10F)
-            .waitDurationInOpenState(Duration.ofSeconds(15))
+            .failureRateThreshold(5F)
+            .slowCallRateThreshold(5F)
+            .waitDurationInOpenState(Duration.ofSeconds(10))
             .slowCallDurationThreshold(Duration.ofSeconds(1))
-            .permittedNumberOfCallsInHalfOpenState(30)
+            .permittedNumberOfCallsInHalfOpenState(40)
             .build()
     )
 
@@ -102,42 +102,8 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        val breakerStartNanos = System.nanoTime()
-
-        val result = try {
-            if (!circuitBreaker.tryAcquirePermission()) {
-                logger.warn(
-                    "[$accountName] Circuit breaker is OPEN. Payment request skipped for paymentId=$paymentId, txId=$transactionId"
-                )
-                Result(false, "Circuit breaker open")
-            } else {
-                val hedgedResult = hedged(delay = 200.milliseconds, maxAttempts = 5) {
-                    send(paymentId, amount, transactionId, paymentStartedAt)
-                }
-
-                val durationNanos = System.nanoTime() - breakerStartNanos
-
-                if (hedgedResult.status) {
-                    circuitBreaker.onSuccess(durationNanos, TimeUnit.NANOSECONDS)
-                } else {
-                    circuitBreaker.onError(
-                        durationNanos,
-                        TimeUnit.NANOSECONDS,
-                        PaymentProviderException(hedgedResult.message ?: "Payment provider returned unsuccessful result")
-                    )
-                }
-
-                hedgedResult
-            }
-        } catch (e: Exception) {
-            val durationNanos = System.nanoTime() - breakerStartNanos
-            circuitBreaker.onError(durationNanos, TimeUnit.NANOSECONDS, e)
-
-            logger.error(
-                "[$accountName] Payment execution failed under circuit breaker for txId: $transactionId, payment: $paymentId.",
-                e
-            )
-            Result(false, e.message)
+        val result = hedged(delay = 200.milliseconds, maxAttempts = 5) {
+            send(paymentId, amount, transactionId, paymentStartedAt)
         }
 
         val processedAt = now()
@@ -156,15 +122,34 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     suspend fun send(paymentId: UUID, amount: Int, transactionId: UUID, paymentStartedAt: Long): Result {
+        val startedAt = now()
+        var semaphoreAcquired = false
+
         try {
+            while (!circuitBreaker.tryAcquirePermission()) {
+                delay(10)
+            }
+
             semaphore.acquire()
+            semaphoreAcquired = true
 
             if (!rateLimiter.acquireSuspend(200L)) {
+                val duration = now() - startedAt
+                circuitBreaker.onError(
+                    duration,
+                    TimeUnit.MILLISECONDS,
+                    PaymentProviderException("Rate limit exceeded")
+                )
                 return Result(false, "Rate limit exceeded")
             }
 
-            val response =
-                client.post("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
+            val response = withTimeout(2000) {
+                client.post(
+                    "http://$paymentProviderHostPort/external/process?" +
+                            "serviceName=$serviceName&token=$token&accountName=$accountName" +
+                            "&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"
+                )
+            }
 
             val responseText = response.bodyAsText()
 
@@ -178,11 +163,29 @@ class PaymentExternalSystemAdapterImpl(
                 ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
             }
 
+            val duration = now() - startedAt
+
+            if (body.result) {
+                circuitBreaker.onSuccess(duration, TimeUnit.MILLISECONDS)
+            } else {
+                circuitBreaker.onError(
+                    duration,
+                    TimeUnit.MILLISECONDS,
+                    PaymentProviderException(body.message ?: "Payment provider returned unsuccessful result")
+                )
+            }
+
             logger.info(
                 "[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}."
             )
             return Result(body.result, body.message)
+        } catch (e: TimeoutCancellationException) {
+            logger.error("[$accountName] Request timeout for txId: $transactionId, payment: $paymentId after 2 seconds.", e)
+            circuitBreaker.onError(2000, TimeUnit.MILLISECONDS, e)
+            return Result(false, e.message)
         } catch (e: Exception) {
+            val duration = now() - startedAt
+
             when (e) {
                 is SocketTimeoutException -> {
                     logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId.", e)
@@ -195,9 +198,16 @@ class PaymentExternalSystemAdapterImpl(
                     logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId.", e)
                 }
             }
+
+            if (e !is CancellationException) {
+                circuitBreaker.onError(duration, TimeUnit.MILLISECONDS, e)
+            }
+
             return Result(false, e.message)
         } finally {
-            semaphore.release()
+            if (semaphoreAcquired) {
+                semaphore.release()
+            }
         }
     }
 
