@@ -102,32 +102,13 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        val breakerStartNanos = System.nanoTime()
-
         val result = try {
-            val hedgedResult = hedged(delay = 200.milliseconds, maxAttempts = 5) {
+            hedged(delay = 200.milliseconds, maxAttempts = 5) {
                 send(paymentId, amount, transactionId, paymentStartedAt)
             }
-
-            val durationNanos = System.nanoTime() - breakerStartNanos
-
-            if (hedgedResult.status) {
-                circuitBreaker.onSuccess(durationNanos, TimeUnit.NANOSECONDS)
-            } else {
-                circuitBreaker.onError(
-                    durationNanos,
-                    TimeUnit.NANOSECONDS,
-                    PaymentProviderException(hedgedResult.message ?: "Payment provider returned unsuccessful result")
-                )
-            }
-
-            hedgedResult
         } catch (e: Exception) {
-            val durationNanos = System.nanoTime() - breakerStartNanos
-            circuitBreaker.onError(durationNanos, TimeUnit.NANOSECONDS, e)
-
             logger.error(
-                "[$accountName] Payment execution failed under circuit breaker for txId: $transactionId, payment: $paymentId.",
+                "[$accountName] Payment execution failed for txId: $transactionId, payment: $paymentId.",
                 e
             )
             Result(false, e.message)
@@ -149,15 +130,13 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     suspend fun send(paymentId: UUID, amount: Int, transactionId: UUID, paymentStartedAt: Long): Result {
-        try {
-            while (!circuitBreaker.tryAcquirePermission()) {
-                delay(10)
-            }
+        val startedAtNanos = System.nanoTime()
 
+        try {
             semaphore.acquire()
 
-            if (!rateLimiter.acquireSuspend(200L)) {
-                return Result(false, "Rate limit exceeded")
+            while (!circuitBreaker.tryAcquirePermission() || !rateLimiter.acquireSuspend(200L)) {
+                delay(10)
             }
 
             val response =
@@ -175,11 +154,24 @@ class PaymentExternalSystemAdapterImpl(
                 ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
             }
 
+            val durationNanos = System.nanoTime() - startedAtNanos
+            if (body.result) {
+                circuitBreaker.onSuccess(durationNanos, TimeUnit.NANOSECONDS)
+            } else {
+                circuitBreaker.onError(
+                    durationNanos,
+                    TimeUnit.NANOSECONDS,
+                    PaymentProviderException(body.message ?: "Payment provider returned unsuccessful result")
+                )
+            }
+
             logger.info(
                 "[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}."
             )
             return Result(body.result, body.message)
         } catch (e: Exception) {
+            val durationNanos = System.nanoTime() - startedAtNanos
+
             when (e) {
                 is SocketTimeoutException -> {
                     logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId.", e)
@@ -192,6 +184,11 @@ class PaymentExternalSystemAdapterImpl(
                     logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId.", e)
                 }
             }
+
+            if (e !is CancellationException) {
+                circuitBreaker.onError(durationNanos, TimeUnit.NANOSECONDS, e)
+            }
+
             return Result(false, e.message)
         } finally {
             semaphore.release()
