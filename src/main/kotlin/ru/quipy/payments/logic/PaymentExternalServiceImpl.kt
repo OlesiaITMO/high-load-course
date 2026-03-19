@@ -62,8 +62,8 @@ class PaymentExternalSystemAdapterImpl(
     private val circuitBreaker = CircuitBreaker.of(
         "paymentService-$accountName",
         CircuitBreakerConfig.custom()
-            .failureRateThreshold(8F)
-            .slowCallRateThreshold(8F)
+            .failureRateThreshold(5F)
+            .slowCallRateThreshold(5F)
             .waitDurationInOpenState(Duration.ofSeconds(10))
             .slowCallDurationThreshold(Duration.ofSeconds(1))
             .permittedNumberOfCallsInHalfOpenState(40)
@@ -157,6 +157,10 @@ class PaymentExternalSystemAdapterImpl(
 
     suspend fun send(paymentId: UUID, amount: Int, transactionId: UUID, paymentStartedAt: Long): Result {
         try {
+            while (!circuitBreaker.tryAcquirePermission()) {
+                delay(10)
+            }
+
             semaphore.acquire()
 
             if (!rateLimiter.acquireSuspend(200L)) {
