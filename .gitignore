@@ -18,8 +18,6 @@ target/
 *.iws
 *.iml
 *.ipr
-http-client.env.json
-vars.env
 
 ### NetBeans ###
 /nbproject/private/
@@ -31,8 +29,6 @@ vars.env
 build/
 !**/src/main/**/build/
 !**/src/test/**/build/
-/grafana/data
-/prometheus/data
 
 ### VS Code ###
 .vscode/

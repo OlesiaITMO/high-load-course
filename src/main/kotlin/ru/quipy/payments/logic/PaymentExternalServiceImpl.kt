@@ -14,7 +14,10 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import okhttp3.RequestBody
+import org.apache.commons.lang3.ObjectUtils
 import org.slf4j.LoggerFactory
+import ru.quipy.core.EventSourcingService
+import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.common.utils.NonBlockingOngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import java.net.URI
@@ -32,7 +35,7 @@ import kotlin.coroutines.resumeWithException
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
-//    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
     private val meterRegistry: MeterRegistry
@@ -88,9 +91,9 @@ class PaymentExternalSystemAdapterImpl(
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-//        paymentESService.update(paymentId) {
-//            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-//        }
+        paymentESService.update(paymentId) {
+            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
+        }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
@@ -101,7 +104,12 @@ class PaymentExternalSystemAdapterImpl(
             .header("x-idempotency-key", idempotencyKey)
             .build()
 
-        sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
+        val result = sendRequest(request, transactionId, paymentId, retryCount = 5, deadline = deadline)
+        // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+        // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+        paymentESService.update(paymentId) {
+            it.logProcessing(result.result, now(), transactionId, reason = result.message)
+        }
     }
 
     override fun price() = properties.price
@@ -116,9 +124,10 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID,
         retryCount: Int = 1,
         deadline: Long = 1
-    ) {
+    ): ExternalSysResponse {
         var x = 0
         var shouldTry = true
+        var finalResult: ExternalSysResponse? = null
         while (shouldTry) {
             shouldTry = false
             x++
@@ -156,10 +165,14 @@ class PaymentExternalSystemAdapterImpl(
                     shouldTry = true
                     delay(10 * x.toLong())
                 }
+                finalResult = result
             } catch (e: Exception) {
                 logger.error("[$accountName] Payment failed for $paymentId", e)
+                finalResult = ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "timeout")
             }
         }
+
+        return finalResult!!
     }
 
     private suspend fun sendSingleRequest(
